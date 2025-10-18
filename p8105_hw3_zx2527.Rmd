@@ -1,0 +1,337 @@
+---
+title: "p8105_hw3_zx2527"
+author: "Zihan Xiong"
+date: "2025-10-11"
+output: github_document
+---
+
+# Library load
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(p8105.datasets)
+library(lubridate)
+library(patchwork)
+library(scales)
+```
+
+
+# Problem 1
+
+```{r}
+data("instacart")
+glimpse(instacart)
+```
+**Description of the dataset**
+
+There are `r nrow(instacart)` rows and `r ncol(instacart)` columns,
+and each of them represents a single product added to a user’s grocery order on the Instacart. 
+
+Key variables include:
+
+1. order_id (unique order to help identify)
+2. product_id 
+3. add_to_cart_order (order in which each product was added to cart)
+4. reordered (the product has been repurchased by the same customer or not)
+5. user_id   
+6. eval_set (which evaluation set this order belongs in)
+7. order_number 
+8. order_dow  (the day of the week on which the order was placed)
+9. order_hour_of_day (the hour of the day on which the order was placed)
+10. days_since_prior_order (days since the last order, capped at 30, NA if order_number=1)
+11. product_name 
+12. aisle_id (aisle identifier)
+13. department_id   
+14. aisle 
+15. department 
+
+Description:
+
+For example, in order #1, user 112108 purchased six items — including products with IDs 49302 and 11109 — as part of their fourth recorded order (order_number = 4) on a Thursday (order_dow = 4).
+
+```{r}
+aisle_counts = instacart |>
+  count(aisle) |>
+  arrange(desc(n))
+
+
+n_aisles <- nrow(aisle_counts)
+n_aisles
+
+head(aisle_counts, 10)
+```
+Description:
+
+There are **134** aisles and **fresh vegetables (150609 orders) and fresh fruits (150473 orders)** are the most items ordered from.
+
+**Make a plot on aisles with more than 10000 items**
+```{r}
+instacart |>
+  count(aisle) |>
+  filter(n > 10000) |>
+  mutate(aisle=fct_reorder(aisle,n)) |>
+  ggplot(aes(x = aisle, y=n)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    x = "Aisle",
+    y = "Number of items ordered",
+    title = "Items ordered by aisle (>10,000 orders)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+top3_tbl = instacart |>
+  filter(aisle %in% c("baking ingredients", "dog food care", "packaged vegetables fruits")) |>
+  group_by(aisle, product_name) |>
+  summarize(n = n(), .groups = "drop_last") |>
+  arrange(aisle, desc(n)) |>
+  mutate(rank_in_aisle = min_rank(desc(n))) |>
+  filter(rank_in_aisle <= 3) |>
+  arrange(aisle, rank_in_aisle) |>
+  select(aisle, product_name, n)
+
+knitr::kable(top3_tbl, digits = 0, col.names = c("Aisle", "Product", "Orders"))
+```
+
+```{r}
+mean_hour_tbl = instacart |>
+  filter(product_name %in% c("Pink Lady Apples", "Coffee Ice Cream")) |>
+  group_by(product_name, order_dow) |>
+  summarize(mean_hour = mean(order_hour_of_day, na.rm = TRUE), .groups = "drop") |>
+  pivot_wider(
+    names_from = order_dow,
+    values_from = mean_hour
+  )
+
+knitr::kable(mean_hour_tbl, digits = 2,
+             col.names = c("Product", "Sun","Mon","Tue","Wed","Thu","Fri","Sat"))
+```
+
+# Problem 2
+
+## data import
+```{r}
+zori_raw = 
+  read_csv("./data/Zip_zori_uc_sfrcondomfr_sm_month_NYC.csv",
+           na = c("NA", "", "."), show_col_types = FALSE) |>
+  janitor::clean_names()
+
+zipcodes_raw = 
+  read_csv("./data/Zip Codes.csv", na = c("NA", "", "."), show_col_types = FALSE) |>
+  janitor::clean_names()
+```
+
+```{r}
+names(zori_raw)
+names(zipcodes_raw)
+```
+
+## clean and standardize zipcodes_raw
+```{r}
+zipcodes_raw = 
+  zipcodes_raw |>
+  mutate(
+    zip = str_pad(as.character(zip_code), 5, pad = "0"),
+    county = str_to_title(county) |> str_trim()
+  )
+
+county_to_borough = c(
+  "Bronx"      = "Bronx",
+  "Kings"      = "Brooklyn",
+  "New York"   = "Manhattan",
+  "Queens"     = "Queens",
+  "Richmond"   = "Staten Island"
+)
+
+zipcodes_raw = 
+  zipcodes_raw |>
+  mutate(borough = recode(county, !!!county_to_borough)) |>
+  filter(!is.na(borough)) |>
+  distinct(zip, .keep_all = TRUE) |>
+  select(zip, borough, county, neighborhood)
+```
+
+## pivot longer for zori_raw
+```{r}
+zori_raw = 
+  zori_raw |>
+  mutate(zip = str_pad(as.character(region_name), 5, pad = "0")) |>
+  pivot_longer(
+    cols = matches("^x\\d{4}_\\d{2}_\\d{2}$"),
+    names_to = "date",
+    values_to = "rent"
+  ) |>
+  mutate(
+    date = ymd(str_replace_all(str_remove(date, "^x"), "_", "-")),
+  ) |>
+  filter(!is.na(date))
+
+zori_raw
+```
+
+## join the tables
+```{r}
+zillow_nyc = 
+  left_join(zori_raw, zipcodes_raw, by = "zip") |>
+  filter(!is.na(borough)) |>
+  select(zip, borough, county, neighborhood, date, rent)
+
+zillow_nyc
+
+```
+
+## restrict to Jan 2015–Aug 2024 
+```{r}
+zillow_2015_2024 =
+  zillow_nyc |>
+  filter(date >= as.Date("2015-01-01"),
+         date <= as.Date("2024-08-31"))
+
+zip_coverage =
+  zillow_2015_2024 |>
+  group_by(zip) |>
+  summarize(n_months = n_distinct(date), .groups = "drop")
+
+n_zip_116  = zip_coverage |> filter(n_months == 116) |> nrow()
+n_zip_lt10 = zip_coverage |> filter(n_months < 10)   |> nrow()
+
+n_zip_116
+n_zip_lt10
+```
+There are 149 ZIP codes are observed 116 times, and 0 of them are observed fewer than 10 times.
+
+ZIPs observed rarely are typically edge cases (boundary changes, small or newly defined ZIPs, or missing data), whereas ZIPs observed in every month are stable residential/commercial areas with consistent reporting.
+
+## Derive borough from county and make the borough × year table
+Description:
+
+This table summarizes the average Zillow Observed Rent Index (ZORI) across New York City boroughs for 2015–2024. Values are rounded to the nearest dollar for readability.
+
+Boroughs such as Manhattan and Brooklyn show consistently higher mean rent compared to Bronx or Staten Island, and all boroughs display an upward trend in recent years (especially post-2021).
+
+```{r}
+borough_year_tbl =
+  zillow_2015_2024 |>
+  mutate(year = lubridate::year(date)) |>
+  group_by(borough, year) |>
+  summarize(
+    mean_rent = mean(rent, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(borough, year)
+
+borough_year_wide =
+  borough_year_tbl |>
+  pivot_wider(
+    names_from = year,
+    values_from = mean_rent
+  )|>
+  mutate(across(-borough, ~ round(.x, 0))) 
+
+borough_year_wide |>
+  knitr::kable(
+    digits = 0,
+    caption = "Average Monthly Rent by Borough and Year (2015–2024)"
+  )
+
+```
+
+## Plot of NYC Rental Prices across ZIP codes and Boroughs
+
+Description:
+
+This plot visualizes monthly rent trends (ZORI) for all NYC ZIP codes between 2015–2024. Thin lines show individual ZIP code trajectories; bold lines indicate borough-level medians.
+
+In general, Manhattan and Brooklyn have consistently higher rents with strong growth post-2021, and all of the boroughs showed an increased trend.
+```{r}
+
+zillow_clean = 
+  zillow_2015_2024 |> 
+  filter(!is.na(rent), is.finite(rent)) |> 
+  group_by(borough, date) |> 
+  mutate(median_rent_borough = median(rent, na.rm = TRUE)) |> 
+  ungroup()
+
+all_years_plot = zillow_clean |> 
+  ggplot(aes(x = date, y = rent, group = zip)) +
+  geom_line(alpha = 0.1) +
+  stat_summary(
+    aes(group = borough),
+    fun = median,
+    geom = "line",
+    linewidth = 1
+  ) +
+  facet_wrap(~ borough, ncol = 2, scales = "free_y") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(
+    title = "NYC Rental Prices by Borough, 2015–2024",
+    subtitle = "Thin lines = ZIP codes; Thick lines = Borough medians",
+    x = "Year",
+    y = "ZORI (Rent, USD)"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+all_years_plot
+```
+
+## Violin plot for rent distribution by borough
+```{r}
+
+rent_2023_zip = 
+  zillow_2015_2024 |> 
+  mutate(year = year(date)) |> 
+  filter(year == 2023) |> 
+  group_by(borough, zip) |> 
+  filter(!is.na(rent), is.finite(rent))|>
+  summarize(
+    mean_rent = mean(rent, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+rent_2023_plot = 
+  rent_2023_zip |> 
+  ggplot(aes(x = borough, y = mean_rent)) +
+  geom_violin(alpha = 0.6) +
+  labs(
+    title = "Distribution of Average ZIP-level Rents by Borough (2023)",
+    x = "Borough",
+    y = "Average Monthly Rent (USD)"
+  ) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+rent_2023_plot
+```
+
+## combine
+```{r}
+combined_plot =
+  (all_years_plot | rent_2023_plot) +
+  patchwork::plot_annotation(
+    title = "NYC Rental Prices: Long-term Trends and 2023 Distributions",
+    subtitle = "Left: Borough-level rent trends (2015–2024)  |  Right: ZIP-level average rent distributions (2023)"
+  )
+
+
+combined_plot
+
+
+dir.create("results", showWarnings = FALSE)
+ggsave(
+  filename = "results/combined_rent_panels.png",
+  plot = combined_plot,
+  width = 13, height = 6, dpi = 300
+)
+
+
+```
+
+## Problem 3
+```{r}
+
+```
