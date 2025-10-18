@@ -14,6 +14,8 @@ library(p8105.datasets)
 library(lubridate)
 library(patchwork)
 library(scales)
+library(knitr)
+
 ```
 
 
@@ -179,8 +181,6 @@ zillow_nyc =
   filter(!is.na(borough)) |>
   select(zip, borough, county, neighborhood, date, rent)
 
-zillow_nyc
-
 ```
 
 ## restrict to Jan 2015–Aug 2024 
@@ -331,7 +331,134 @@ ggsave(
 
 ```
 
-## Problem 3
+# Problem 3
+
+## import and clean demographics
 ```{r}
+covar_df=
+  read_csv("data/nhanes_covar.csv",
+           na = c("", "NA", "."), skip = 4, show_col_types = FALSE) |>
+  clean_names()
+
+accel_df = 
+  read_csv("data/nhanes_accel.csv",  show_col_types = FALSE) |> 
+  clean_names()
+
+accel_df
+covar_df
+```
+
+## Tidy covar_df
+```{r}
+covar_clean = 
+  covar_df |> 
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    education = case_when(
+      education == 1 ~ "Less than high school",
+      education == 2 ~ "High school equivalent",
+      education == 3 ~ "More than high school",
+      TRUE ~ NA_character_
+    ),
+
+    sex = factor(sex, levels = c("Female", "Male")),
+    education = factor(education, 
+                       levels = c("Less than high school", 
+                                  "High school equivalent", 
+                                  "More than high school"))
+  ) |> 
+
+  filter(age >= 21) |> 
+  drop_na()
 
 ```
+
+
+## tidy accel_df
+```{r}
+
+
+accel_tidy =
+  accel_df |>
+  clean_names() |>
+  mutate(
+    seqn = as.numeric(seqn)
+  ) |>
+  distinct(seqn, .keep_all = TRUE)
+
+
+accel_tidy =
+  accel_tidy |>
+  pivot_longer(
+    cols = starts_with("min"),
+    names_to = "minute_label",
+    values_to = "mims"
+  ) |>
+  mutate(
+    minute = readr::parse_number(minute_label),
+    mims = as.numeric(mims)
+  ) |>
+  filter(minute >= 1, minute <= 1440) |>
+  mutate(
+    time_of_day = as.POSIXct("2000-01-01 00:00:00", tz = "UTC") +
+      lubridate::dminutes(minute - 1)
+  ) |>
+  select(seqn, minute, time_of_day, mims)
+
+```
+
+## Join and summarize
+```{r}
+nhanes_merged =
+  inner_join(covar_clean, accel_tidy, by = "seqn") |>
+  arrange(seqn, minute)
+
+nhanes_summary =
+  nhanes_merged |>
+  group_by(seqn, sex, age, education) |>
+  summarize(
+    total_mims = sum(mims, na.rm = TRUE),
+    avg_mims   = mean(mims, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_mims))
+
+```
+
+## Table on Counts of Men and Women by Education
+
+```{r}
+
+sex_edu_summary =
+  covar_clean |>
+  group_by(education, sex) |>
+  summarize(n = n(), .groups = "drop_last") |>
+  mutate(
+    percent_within_edu = n / sum(n)
+  ) |>
+  ungroup() |>
+  mutate(
+    percent_within_edu = percent(percent_within_edu, accuracy = 0.1)
+  )
+
+kable(
+  sex_edu_summary,
+  caption = "Table 1. Distribution of men and women across education levels (NHANES accelerometer sample, ≥21 y)",
+  align = c("l", "l", "r", "r"),
+  col.names = c("Education", "Sex", "Count", "Percent")
+)
+sex_edu_summary
+```
+
+
+
+
+
+
+
+
